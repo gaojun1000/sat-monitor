@@ -22,7 +22,7 @@ URL = "https://satsuite.collegeboard.org/sat/dates-deadlines"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "YOUR_DISCORD_WEBHOOK_URL_HERE")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1002594329611")
-DATE_THRESHOLD = 6  # Alert if more than this many dates are found
+DATE_THRESHOLD = 7  # Alert if more than this many dates are found
 
 
 def fetch_page():
