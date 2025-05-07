@@ -2,7 +2,7 @@ name: SAT Test Dates Monitor
 
 on:
   schedule:
-    # Run every 30 minutes
+    # Run every 5 minutes
     - cron: '*/5 * * * *'
 
   # Allow manual triggering of the workflow
@@ -30,5 +30,7 @@ jobs:
       - name: Run SAT Monitor
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: "-1002594329611"
         run: |
           python sat_monitor.py

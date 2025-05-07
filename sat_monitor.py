@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import logging
+import os
 from datetime import datetime
 
 # Configure logging
@@ -18,8 +19,10 @@ logger = logging.getLogger("sat_monitor")
 
 # Configuration
 URL = "https://satsuite.collegeboard.org/sat/dates-deadlines"
-WEBHOOK_URL = "https://discord.com/api/webhooks/1369168716297666610/MVBIr8xyOJAlBADSlSrQfuVdu7HfkUe4a5rEX_rZMoHedi4suH3eYfWEKoI4XrrMYCN7"  # Replace with your actual Discord webhook URL
-DATE_THRESHOLD = 7  # Alert if more than this many dates are found
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "YOUR_DISCORD_WEBHOOK_URL_HERE")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1002594329611")
+DATE_THRESHOLD = 6  # Alert if more than this many dates are found
 
 
 def fetch_page():
@@ -82,6 +85,10 @@ def extract_test_dates(html_content):
 
 def send_discord_notification(test_dates):
     """Send notification to Discord webhook"""
+    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "YOUR_DISCORD_WEBHOOK_URL_HERE":
+        logger.warning("Discord webhook URL not configured, skipping Discord notification")
+        return False
+
     logger.info(f"Sending Discord notification about {len(test_dates)} test dates")
 
     try:
@@ -116,7 +123,7 @@ def send_discord_notification(test_dates):
 
         # Send notification
         response = requests.post(
-            WEBHOOK_URL,
+            DISCORD_WEBHOOK_URL,
             json=message,
             headers={"Content-Type": "application/json"},
             timeout=10
@@ -127,6 +134,62 @@ def send_discord_notification(test_dates):
         return True
     except Exception as e:
         logger.error(f"Error sending Discord notification: {e}")
+        return False
+
+
+def send_telegram_notification(test_dates):
+    """Send notification to Telegram channel"""
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+        logger.warning("Telegram bot token not configured, skipping Telegram notification")
+        return False
+
+    logger.info(f"Sending Telegram notification about {len(test_dates)} test dates")
+
+    try:
+        # Create message text
+        message_text = (
+            f"⚠️ *SAT Test Dates Alert*\n\n"
+            f"Found {len(test_dates)} SAT test dates, which exceeds the threshold of {DATE_THRESHOLD}.\n\n"
+            f"*Current Test Dates:*\n"
+        )
+
+        # Add each test date
+        for date in test_dates:
+            message_text += f"• {date}\n"
+
+        # Add check time and URL
+        message_text += f"\n*Check Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        message_text += f"*URL:* {URL}"
+
+        # Telegram Bot API URL
+        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+        # Prepare payload
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message_text,
+            "parse_mode": "Markdown"
+        }
+
+        # Send notification
+        response = requests.post(
+            telegram_url,
+            json=payload,
+            timeout=10
+        )
+        response.raise_for_status()
+
+        # Check response from Telegram
+        response_json = response.json()
+        if response_json.get("ok"):
+            logger.info("Telegram notification sent successfully")
+            return True
+        else:
+            logger.error(f"Telegram API error: {response_json.get('description', 'Unknown error')}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Error sending Telegram notification: {e}")
         return False
 
 
@@ -148,7 +211,19 @@ def main():
         # Check if the number of test dates exceeds the threshold
         if len(test_dates) > DATE_THRESHOLD:
             logger.warning(f"Found {len(test_dates)} test dates, which exceeds the threshold of {DATE_THRESHOLD}")
-            send_discord_notification(test_dates)
+
+            # Send notifications to both platforms
+            discord_result = send_discord_notification(test_dates)
+            telegram_result = send_telegram_notification(test_dates)
+
+            if discord_result and telegram_result:
+                logger.info("All notifications sent successfully")
+            elif discord_result:
+                logger.warning("Only Discord notification sent successfully")
+            elif telegram_result:
+                logger.warning("Only Telegram notification sent successfully")
+            else:
+                logger.error("All notifications failed")
         else:
             logger.info(f"Found {len(test_dates)} test dates, which does not exceed the threshold of {DATE_THRESHOLD}")
 
