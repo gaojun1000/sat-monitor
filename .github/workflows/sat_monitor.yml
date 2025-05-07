@@ -3,7 +3,7 @@ name: SAT Test Dates Monitor
 on:
   schedule:
     # Run every 30 minutes
-    - cron: '*/30 * * * *'
+    - cron: '*/5 * * * *'
 
   # Allow manual triggering of the workflow
   workflow_dispatch:
