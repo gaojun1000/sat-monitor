@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 
@@ -20,49 +21,63 @@ logger = logging.getLogger("sat_monitor")
 
 # Configuration
 URL = "https://satsuite.collegeboard.org/sat/dates-deadlines"
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "YOUR_DISCORD_WEBHOOK_URL_HERE")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1002594329611")
 DATE_THRESHOLD = 7  # Alert if more than this many dates are found
-STATE_FILE = "sat_monitor_state.json"  # File to store the last modified timestamp
+STATE_FILE = "sat_monitor_state.json"  # File to store the last state
 
 
 def fetch_page() -> Optional[Dict[str, str]]:
     """Fetch the SAT dates page using requests and capture the Last-Modified header"""
     logger.info(f"Fetching {URL}")
 
-    try:
-        # Add headers to mimic a browser
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
-        }
+    # Add retry mechanism for robustness
+    max_retries = 3
+    retry_delay = 5  # seconds
 
-        # Make the request with a longer timeout
-        response = requests.get(URL, headers=headers, timeout=30)
-        response.raise_for_status()
+    for attempt in range(max_retries):
+        try:
+            # Add headers to mimic a browser
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            }
 
-        # Get the Last-Modified header if it exists
-        last_modified = response.headers.get('Last-Modified')
+            # Make the request with a longer timeout
+            response = requests.get(URL, headers=headers, timeout=30)
+            response.raise_for_status()
 
-        if last_modified:
-            logger.info(f"Page Last-Modified: {last_modified}")
-        else:
-            # If no Last-Modified header, use ETag or current time
-            last_modified = response.headers.get('ETag') or datetime.now().isoformat()
-            logger.info(f"No Last-Modified header, using alternative: {last_modified}")
+            # Get the Last-Modified header if it exists
+            last_modified = response.headers.get('Last-Modified')
 
-        logger.info("Successfully fetched page with requests")
-        return {
-            'content': response.text,
-            'last_modified': last_modified,
-            'status_code': response.status_code
-        }
+            if last_modified:
+                logger.info(f"Page Last-Modified: {last_modified}")
+            else:
+                # If no Last-Modified header, use ETag or current time
+                last_modified = response.headers.get('ETag') or datetime.now().isoformat()
+                logger.info(f"No Last-Modified header, using alternative: {last_modified}")
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to fetch the page: {e}")
-        return None
+            logger.info(f"Successfully fetched page with status code: {response.status_code}")
+            return {
+                'content': response.text,
+                'last_modified': last_modified,
+                'status_code': response.status_code
+            }
+
+        except requests.exceptions.RequestException as e:
+            attempt_num = attempt + 1
+            if attempt_num < max_retries:
+                logger.warning(f"Attempt {attempt_num}/{max_retries} failed: {e}. Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"All {max_retries} attempts failed to fetch the page: {e}")
+                return None
+
+    return None
 
 
 def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
@@ -74,10 +89,20 @@ def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
             logger.info(f"Loaded state from {STATE_FILE}")
             return state
         else:
-            logger.info(f"No state file found at {STATE_FILE}")
+            logger.info(f"No state file found at {STATE_FILE}, will create a new one")
             return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing state file (corrupted JSON): {e}")
+        # Rename the corrupted file for debugging
+        backup_name = f"{STATE_FILE}.corrupted.{int(time.time())}"
+        try:
+            os.rename(STATE_FILE, backup_name)
+            logger.info(f"Renamed corrupted state file to {backup_name}")
+        except Exception as rename_err:
+            logger.error(f"Failed to rename corrupted state file: {rename_err}")
+        return None
     except Exception as e:
-        logger.error(f"Error loading state: {e}")
+        logger.error(f"Unexpected error loading state: {e}")
         return None
 
 
@@ -91,8 +116,13 @@ def save_state(last_modified: str, test_dates: List[str]) -> None:
     }
 
     try:
-        with open(STATE_FILE, 'w', encoding='utf-8') as f:
+        # First write to a temporary file, then rename to avoid partial writes
+        temp_file = f"{STATE_FILE}.tmp"
+        with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
+
+        # Atomic replace
+        os.replace(temp_file, STATE_FILE)
         logger.info(f"Saved state to {STATE_FILE}")
     except Exception as e:
         logger.error(f"Error saving state: {e}")
@@ -111,7 +141,18 @@ def extract_test_dates(html_content: str) -> List[str]:
         table = soup.find('table', class_='cb-table cb-no-margin-top')
 
         if not table:
-            logger.warning("Could not find the SAT dates table")
+            # Try alternative selectors if the table class changed
+            tables = soup.find_all('table')
+            if tables:
+                logger.warning("Could not find table with expected class, trying alternative tables")
+                # Try to find a table that looks like it contains test dates
+                for potential_table in tables:
+                    if potential_table.find('th') and "date" in potential_table.text.lower():
+                        table = potential_table
+                        break
+
+        if not table:
+            logger.warning("Could not find any table that might contain SAT dates")
             return []
 
         # Find all rows in the table
@@ -139,7 +180,7 @@ def send_discord_notification(
         prev_modified: Optional[str] = None
 ) -> bool:
     """Send notification to Discord webhook"""
-    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "YOUR_DISCORD_WEBHOOK_URL_HERE":
+    if not DISCORD_WEBHOOK_URL:
         logger.warning("Discord webhook URL not configured, skipping Discord notification")
         return False
 
@@ -164,7 +205,7 @@ def send_discord_notification(
                 "fields": [
                     {
                         "name": "Current Test Dates",
-                        "value": "\n".join([f"• {date}" for date in test_dates]),
+                        "value": "\n".join([f"• {date}" for date in test_dates]) or "No dates found",
                         "inline": False
                     },
                     {
@@ -201,17 +242,26 @@ def send_discord_notification(
             "inline": False
         })
 
-        # Send notification
-        response = requests.post(
-            DISCORD_WEBHOOK_URL,
-            json=message,
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
-        response.raise_for_status()
-
-        logger.info("Discord notification sent successfully")
-        return True
+        # Send notification with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    DISCORD_WEBHOOK_URL,
+                    json=message,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10
+                )
+                response.raise_for_status()
+                logger.info(f"Discord notification sent successfully (status code {response.status_code})")
+                return True
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Discord notification attempt {attempt + 1} failed: {e}. Retrying...")
+                    time.sleep(2)  # Wait before retry
+                else:
+                    logger.error(f"All Discord notification attempts failed: {e}")
+                    return False
     except Exception as e:
         logger.error(f"Error sending Discord notification: {e}")
         return False
@@ -224,7 +274,7 @@ def send_telegram_notification(
         prev_modified: Optional[str] = None
 ) -> bool:
     """Send notification to Telegram channel"""
-    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+    if not TELEGRAM_BOT_TOKEN:
         logger.warning("Telegram bot token not configured, skipping Telegram notification")
         return False
 
@@ -248,8 +298,11 @@ def send_telegram_notification(
         )
 
         # Add each test date
-        for date in test_dates:
-            message_text += f"• {date}\n"
+        if test_dates:
+            for date in test_dates:
+                message_text += f"• {date}\n"
+        else:
+            message_text += "No dates found\n"
 
         # Add check time
         message_text += f"\n*Check Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -274,31 +327,54 @@ def send_telegram_notification(
             "parse_mode": "Markdown"
         }
 
-        # Send notification
-        response = requests.post(
-            telegram_url,
-            json=payload,
-            timeout=10
-        )
-        response.raise_for_status()
+        # Send notification with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    telegram_url,
+                    json=payload,
+                    timeout=10
+                )
+                response.raise_for_status()
 
-        # Check response from Telegram
-        response_json = response.json()
-        if response_json.get("ok"):
-            logger.info("Telegram notification sent successfully")
-            return True
-        else:
-            logger.error(f"Telegram API error: {response_json.get('description', 'Unknown error')}")
-            return False
+                # Check response from Telegram
+                response_json = response.json()
+                if response_json.get("ok"):
+                    logger.info("Telegram notification sent successfully")
+                    return True
+                else:
+                    error_msg = response_json.get('description', 'Unknown error')
+                    logger.error(f"Telegram API error: {error_msg}")
+
+                    # Don't retry if it's a permanent error like invalid token
+                    if "unauthorized" in error_msg.lower() or "not found" in error_msg.lower():
+                        return False
+
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Retrying Telegram notification...")
+                        time.sleep(2)  # Wait before retry
+                    else:
+                        return False
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Telegram notification attempt {attempt + 1} failed: {e}. Retrying...")
+                    time.sleep(2)  # Wait before retry
+                else:
+                    logger.error(f"All Telegram notification attempts failed: {e}")
+                    return False
 
     except Exception as e:
         logger.error(f"Error sending Telegram notification: {e}")
         return False
 
+    return False  # Should not reach here
+
 
 def main() -> None:
     """Main function"""
-    logger.info("Starting SAT Test Dates monitoring")
+    logger.info(f"Starting SAT Test Dates monitoring (version 1.0.1)")
+    logger.info(f"Running in GitHub Actions: {os.environ.get('GITHUB_ACTIONS', 'No')}")
 
     # Fetch the page
     page_data = fetch_page()
@@ -314,8 +390,8 @@ def main() -> None:
     test_dates = extract_test_dates(html_content)
 
     if not test_dates:
-        logger.error("Failed to extract test dates")
-        return
+        logger.warning("No test dates extracted from the page")
+        # Continue execution to check if the page changed
 
     # Load previous state
     prev_state = load_state()
@@ -329,16 +405,24 @@ def main() -> None:
     if prev_state:
         # Check if the page has changed since last time based on Last-Modified
         prev_modified_value = prev_state.get("last_modified")
+        prev_dates = prev_state.get("test_dates", [])
+
         if last_modified != prev_modified_value:
             page_changed = True
             prev_modified = prev_modified_value
             should_notify = True
             logger.info(f"Page has been modified since last check (Last-Modified changed)")
+        elif set(test_dates) != set(prev_dates):
+            page_changed = True
+            should_notify = True
+            logger.info(f"Test dates have changed even though Last-Modified header didn't change")
         else:
-            logger.info("Page has not been modified since last check")
+            logger.info("Page and test dates have not changed since last check")
     else:
         # No previous state, this is the first run
         logger.info("First run, no previous state to compare")
+        # Don't notify on first run, just establish a baseline
+        should_notify = False
 
     # Check if the number of test dates exceeds the threshold
     if len(test_dates) > DATE_THRESHOLD:
@@ -364,8 +448,13 @@ def main() -> None:
     # Save current state
     save_state(last_modified, test_dates)
 
-    logger.info("Monitoring completed")
+    logger.info("Monitoring completed successfully")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"Unhandled exception in main function: {e}", exc_info=True)
+        # Exit with error code for GitHub Actions to mark the step as failed
+        exit(1)
