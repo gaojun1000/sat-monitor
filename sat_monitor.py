@@ -107,25 +107,23 @@ def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
 
 
 def save_state(last_modified: str, test_dates: List[str]) -> None:
-    """Save the current state to file"""
+    logger.info("Attempting to execute save_state function...") # ADD THIS
     state = {
         "timestamp": datetime.now().isoformat(),
         "last_modified": last_modified,
         "test_date_count": len(test_dates),
         "test_dates": test_dates
     }
+    logger.info(f"State dictionary to be saved: {state}") # ADD THIS to see what's being saved
 
     try:
-        # First write to a temporary file, then rename to avoid partial writes
         temp_file = f"{STATE_FILE}.tmp"
         with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
-
-        # Atomic replace
         os.replace(temp_file, STATE_FILE)
-        logger.info(f"Saved state to {STATE_FILE}")
+        logger.info(f"Successfully saved state to {STATE_FILE} via os.replace") # MODIFY THIS
     except Exception as e:
-        logger.error(f"Error saving state: {e}")
+        logger.error(f"Error saving state in save_state function: {e}")
 
 
 def extract_test_dates(html_content: str) -> List[str]:
