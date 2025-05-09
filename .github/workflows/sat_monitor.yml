@@ -22,17 +22,16 @@ jobs:
           python-version: '3.13'
           cache: 'pip'
 
-      # Download the previous state artifact
+      # Download the previous state artifact, but allow it to fail
       - name: Download previous state
         id: download-state
+        continue-on-error: true  # This allows the workflow to continue even if this step fails
         uses: actions/download-artifact@v4
         with:
           name: sat-monitor-state
           path: .
-          # The following makes the step not fail if the artifact doesn't exist
-          if-no-artifact-found: ignore
 
-      # Initialize state if artifact wasn't found
+      # Initialize state if artifact wasn't found (check based on file existence)
       - name: Initialize state file if not found
         run: |
           if [ ! -f "sat_monitor_state.json" ]; then
