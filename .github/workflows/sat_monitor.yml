@@ -2,44 +2,63 @@ name: SAT Test Dates Monitor
 
 on:
   schedule:
-    # Run every 5 minutes (as per your previous request)
+    # Run every 5 minutes
     - cron: '*/5 * * * *'
   workflow_dispatch:
+
+# Concurrency control to prevent overlapping runs for the same workflow and branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      contents: read
+      actions: read # For checkout and other actions
+      contents: read # For checkout
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Recommended update
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13' # As per your previous request
+          python-version: '3.13'
           cache: 'pip' # This handles caching for pip packages
 
       # Corrected caching for sat_monitor_state.json
       - name: Restore SAT Monitor state from cache
-        id: sat-state-cache # Added an id for clarity and to access outputs
+        id: sat-state-cache
         uses: actions/cache@v4
         with:
           path: sat_monitor_state.json
-          # Use a consistent key for saving and restoring this state file.
-          # 'v1' can be incremented if you make breaking changes to the state file structure.
-          key: ${{ runner.os }}-sat-monitor-state-data-v1
+          key: ${{ runner.os }}-sat-monitor-state-data-v1 # Consistent key
+
+      - name: DEBUG - Check state file after cache restore
+        if: always() # Run this step even if previous steps fail, for debugging
+        run: |
+          echo "--- DEBUG: After Cache Restore ---"
+          echo "Workflow Run ID: ${{ github.run_id }}, Attempt: ${{ github.run_attempt }}"
+          echo "Cache hit output for 'sat-state-cache': ${{ steps.sat-state-cache.outputs.cache-hit }}"
+          echo "Listing files in current directory:"
+          ls -la .
+          if [ -f sat_monitor_state.json ]; then
+            echo "Content of sat_monitor_state.json:"
+            cat sat_monitor_state.json
+          else
+            echo "sat_monitor_state.json does NOT exist after cache restore."
+          fi
+          echo "--- END DEBUG: After Cache Restore ---"
+        shell: bash
 
       - name: Initialize state file if no cache found
-        # This step runs only if the cache was not restored (i.e., cache-hit is not 'true')
         if: steps.sat-state-cache.outputs.cache-hit != 'true'
         run: |
           echo '{"timestamp": "", "last_modified": "", "test_date_count": 0, "test_dates": []}' > sat_monitor_state.json
           echo "Initialized empty sat_monitor_state.json as no cache was restored."
-        shell: bash # Explicitly set shell for clarity, bash is default on ubuntu-latest
+        shell: bash
 
       - name: Install dependencies
         run: |
@@ -54,18 +73,32 @@ jobs:
         run: |
           python sat_monitor.py
 
+      - name: DEBUG - Check state file before cache save
+        if: always() # Run this step even if previous steps fail, for debugging
+        run: |
+          echo "--- DEBUG: Before Cache Save ---"
+          echo "Workflow Run ID: ${{ github.run_id }}, Attempt: ${{ github.run_attempt }}"
+          echo "Listing files in current directory:"
+          ls -la .
+          if [ -f sat_monitor_state.json ]; then
+            echo "Content of sat_monitor_state.json:"
+            cat sat_monitor_state.json
+          else
+            echo "sat_monitor_state.json does NOT exist before cache save (Python script might have failed to create/update it)."
+          fi
+          echo "--- END DEBUG: Before Cache Save ---"
+        shell: bash
+
       - name: Save SAT Monitor state to cache
-        # This step will run after your python script, saving the new state.
-        # It uses the same key as the restore step to overwrite the cache with the latest state.
         uses: actions/cache@v4
         with:
           path: sat_monitor_state.json
           key: ${{ runner.os }}-sat-monitor-state-data-v1 # Must be the same key used in the restore step
 
       - name: Upload logs as artifact
-        if: always()
-        uses: actions/upload-artifact@v4 # Recommended update
+        if: always() # Ensure logs are uploaded even if previous steps fail
+        uses: actions/upload-artifact@v4
         with:
           name: sat-monitor-logs-${{ github.run_id }}
-          path: sat_monitor.log
+          path: sat_monitor.log # Ensure this is where your Python script writes its log
           retention-days: 5
