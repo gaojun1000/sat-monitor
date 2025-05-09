@@ -2,9 +2,11 @@ name: SAT Test Dates Monitor
 
 on:
   schedule:
+    # Run every 5 minutes
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+# Concurrency control to prevent overlapping runs for the same workflow and branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -12,34 +14,33 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write   # For checkout and other actions
+      contents: write  # For committing changes
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Retrieve full history for proper commits
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: 'pip'
+          cache: 'pip' # This handles caching for pip packages
 
-      # Download the previous state artifact, but allow it to fail
-      - name: Download previous state
-        id: download-state
-        continue-on-error: true  # This allows the workflow to continue even if this step fails
-        uses: actions/download-artifact@v4
-        with:
-          name: sat-monitor-state
-          path: .
-
-      # Initialize state if artifact wasn't found (check based on file existence)
-      - name: Initialize state file if not found
+      - name: DEBUG - Check state file after checkout
         run: |
-          if [ ! -f "sat_monitor_state.json" ]; then
-            echo '{"timestamp": "", "last_modified": "", "test_date_count": 0, "test_dates": []}' > sat_monitor_state.json
-            echo "Initialized empty sat_monitor_state.json as no previous state was found."
-          else
-            echo "Found existing state file from artifact:"
+          echo "--- DEBUG: State File After Checkout ---"
+          if [ -f sat_monitor_state.json ]; then
+            echo "Content of sat_monitor_state.json:"
             cat sat_monitor_state.json
+          else
+            echo "sat_monitor_state.json does not exist after checkout."
+            echo '{"timestamp": "", "last_modified": "", "test_date_count": 0, "test_dates": []}' > sat_monitor_state.json
+            echo "Initialized empty sat_monitor_state.json."
           fi
         shell: bash
 
@@ -59,22 +60,36 @@ jobs:
       - name: DEBUG - Check state file after script run
         run: |
           echo "--- DEBUG: State File After Script Run ---"
-          cat sat_monitor_state.json
+          if [ -f sat_monitor_state.json ]; then
+            echo "Content of sat_monitor_state.json:"
+            cat sat_monitor_state.json
+          else
+            echo "sat_monitor_state.json does not exist after script run."
+          fi
         shell: bash
 
-      # Upload the updated state as an artifact
-      - name: Upload state artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sat-monitor-state
-          path: sat_monitor_state.json
-          retention-days: 30
-          overwrite: true
+      - name: Commit and push updated state file
+        # Only run if the state file exists and has changed
+        if: success()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Check if there are changes in the state file
+          if git diff --exit-code -- sat_monitor_state.json; then
+            echo "No changes in state file. Skipping commit."
+          else
+            echo "Changes detected in state file. Committing..."
+            git add sat_monitor_state.json
+            git commit -m "Update SAT monitor state [skip ci]"
+            git push
+          fi
+        shell: bash
 
       - name: Upload logs as artifact
-        if: always()
+        if: always() # Ensure logs are uploaded even if previous steps fail
         uses: actions/upload-artifact@v4
         with:
           name: sat-monitor-logs-${{ github.run_id }}
-          path: sat_monitor.log
+          path: sat_monitor.log # Ensure this is where your Python script writes its log
           retention-days: 5
