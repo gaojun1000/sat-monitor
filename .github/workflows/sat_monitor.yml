@@ -28,13 +28,15 @@ jobs:
           python-version: '3.13'
           cache: 'pip' # This handles caching for pip packages
 
-      # Restore step remains the same
+      # Updated restore step with fallback keys
       - name: Restore SAT Monitor state from cache
         id: sat-state-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: sat_monitor_state.json
-          key: ${{ runner.os }}-sat-monitor-state-data-v1 # Consistent key
+          key: ${{ runner.os }}-sat-monitor-state-data-v1
+          restore-keys: |
+            ${{ runner.os }}-sat-monitor-state-data-
 
       - name: DEBUG - Check state file after cache restore
         if: always() # Run this step even if previous steps fail, for debugging
@@ -89,12 +91,12 @@ jobs:
           echo "--- END DEBUG: Before Cache Save ---"
         shell: bash
 
-      # Updated to use actions/cache/save@v4
+      # Updated with unique timestamp in the cache key to prevent collisions
       - name: Save SAT Monitor state to cache
         uses: actions/cache/save@v4
         with:
           path: sat_monitor_state.json
-          key: ${{ runner.os }}-sat-monitor-state-data-v1 # Must be the same key used in the restore step
+          key: ${{ runner.os }}-sat-monitor-state-data-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload logs as artifact
         if: always() # Ensure logs are uploaded even if previous steps fail
