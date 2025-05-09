@@ -2,8 +2,8 @@ name: SAT Test Dates Monitor
 
 on:
   schedule:
-    # Run every hour
-    - cron: '0 * * * *'
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
 
   # Allow manual triggering of the workflow
   workflow_dispatch:
@@ -12,17 +12,17 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     permissions:
-      actions: read  # Explicitly give permissions to read actions
+      actions: read
       contents: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13' # Updated to Python 3.13
           cache: 'pip'
 
       - name: Install dependencies
@@ -30,7 +30,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      # Wrap the cache action in a try block using GitHub script
       - name: Try to restore cache
         id: try-restore-cache
         continue-on-error: true
@@ -52,7 +51,6 @@ jobs:
               core.setOutput('cache-restored', 'false');
             }
 
-      # Create an empty state file if it doesn't exist yet
       - name: Create empty state file if it doesn't exist
         run: |
           if [ ! -f sat_monitor_state.json ]; then
@@ -70,10 +68,9 @@ jobs:
         run: |
           python sat_monitor.py
 
-      # Save the cache after the run
       - name: Save cache
         id: save-cache
-        uses: actions/cache/save@v3
+        uses: actions/cache@v4
         continue-on-error: true
         with:
           path: sat_monitor_state.json
@@ -81,7 +78,7 @@ jobs:
 
       - name: Upload logs as artifact
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sat-monitor-logs-${{ github.run_id }}
           path: sat_monitor.log
