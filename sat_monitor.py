@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from typing import Dict, List, Optional, Union
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +27,7 @@ DATE_THRESHOLD = 7  # Alert if more than this many dates are found
 STATE_FILE = "sat_monitor_state.json"  # File to store the last modified timestamp
 
 
-def fetch_page():
+def fetch_page() -> Optional[Dict[str, str]]:
     """Fetch the SAT dates page using requests and capture the Last-Modified header"""
     logger.info(f"Fetching {URL}")
 
@@ -64,11 +65,11 @@ def fetch_page():
         return None
 
 
-def load_state():
+def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
     """Load the previous state from file"""
     try:
         if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, 'r') as f:
+            with open(STATE_FILE, 'r', encoding='utf-8') as f:
                 state = json.load(f)
             logger.info(f"Loaded state from {STATE_FILE}")
             return state
@@ -80,7 +81,7 @@ def load_state():
         return None
 
 
-def save_state(last_modified, test_dates):
+def save_state(last_modified: str, test_dates: List[str]) -> None:
     """Save the current state to file"""
     state = {
         "timestamp": datetime.now().isoformat(),
@@ -90,14 +91,14 @@ def save_state(last_modified, test_dates):
     }
 
     try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f, indent=2)
+        with open(STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved state to {STATE_FILE}")
     except Exception as e:
         logger.error(f"Error saving state: {e}")
 
 
-def extract_test_dates(html_content):
+def extract_test_dates(html_content: str) -> List[str]:
     """Extract the current test dates from the table using BeautifulSoup"""
     if not html_content:
         return []
@@ -117,7 +118,7 @@ def extract_test_dates(html_content):
         rows = table.find_all('tr')
 
         # Extract dates from the first column, excluding the header row
-        test_dates = []
+        test_dates: List[str] = []
         for row in rows[1:]:  # Skip the header row
             # Find the first th element (date column)
             date_cell = row.find('th', scope='row')
@@ -131,7 +132,12 @@ def extract_test_dates(html_content):
         return []
 
 
-def send_discord_notification(test_dates, page_changed=False, last_modified=None, prev_modified=None):
+def send_discord_notification(
+        test_dates: List[str],
+        page_changed: bool = False,
+        last_modified: Optional[str] = None,
+        prev_modified: Optional[str] = None
+) -> bool:
     """Send notification to Discord webhook"""
     if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "YOUR_DISCORD_WEBHOOK_URL_HERE":
         logger.warning("Discord webhook URL not configured, skipping Discord notification")
@@ -211,7 +217,12 @@ def send_discord_notification(test_dates, page_changed=False, last_modified=None
         return False
 
 
-def send_telegram_notification(test_dates, page_changed=False, last_modified=None, prev_modified=None):
+def send_telegram_notification(
+        test_dates: List[str],
+        page_changed: bool = False,
+        last_modified: Optional[str] = None,
+        prev_modified: Optional[str] = None
+) -> bool:
     """Send notification to Telegram channel"""
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
         logger.warning("Telegram bot token not configured, skipping Telegram notification")
@@ -285,7 +296,7 @@ def send_telegram_notification(test_dates, page_changed=False, last_modified=Non
         return False
 
 
-def main():
+def main() -> None:
     """Main function"""
     logger.info("Starting SAT Test Dates monitoring")
 
@@ -317,9 +328,10 @@ def main():
     # Check if we have previous state
     if prev_state:
         # Check if the page has changed since last time based on Last-Modified
-        if last_modified != prev_state.get("last_modified"):
+        prev_modified_value = prev_state.get("last_modified")
+        if last_modified != prev_modified_value:
             page_changed = True
-            prev_modified = prev_state.get("last_modified")
+            prev_modified = prev_modified_value
             should_notify = True
             logger.info(f"Page has been modified since last check (Last-Modified changed)")
         else:

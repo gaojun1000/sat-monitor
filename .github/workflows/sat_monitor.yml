@@ -16,8 +16,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: 'pip'
@@ -27,6 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Download the previous state file if it exists
+      - name: Download previous state
+        uses: actions/download-artifact@v3
+        with:
+          name: sat-monitor-state
+          path: .
+        continue-on-error: true
+
       - name: Run SAT Monitor
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -34,3 +42,11 @@ jobs:
           TELEGRAM_CHAT_ID: "-1002594329611"
         run: |
           python sat_monitor.py
+
+      # Upload the state file as an artifact for the next run
+      - name: Upload state artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: sat-monitor-state
+          path: sat_monitor_state.json
+          retention-days: 1
