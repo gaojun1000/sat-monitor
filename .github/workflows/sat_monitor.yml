@@ -2,7 +2,7 @@ name: SAT Test Dates Monitor
 
 on:
   schedule:
-    # Run every hour (you can adjust this as needed)
+    # Run every hour
     - cron: '0 * * * *'
 
   # Allow manual triggering of the workflow
@@ -11,6 +11,9 @@ on:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read  # Explicitly give permissions to read actions
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -19,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # Using a more stable Python version
+          python-version: '3.11'
           cache: 'pip'
 
       - name: Install dependencies
@@ -27,15 +30,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      # Get the state from cache
-      - name: Restore state cache
-        id: cache-state
-        uses: actions/cache@v3
+      # Wrap the cache action in a try block using GitHub script
+      - name: Try to restore cache
+        id: try-restore-cache
+        continue-on-error: true
+        uses: actions/github-script@v6
         with:
-          path: sat_monitor_state.json
-          key: sat-monitor-state-${{ github.run_id }}
-          restore-keys: |
-            sat-monitor-state-
+          script: |
+            try {
+              const options = {
+                path: 'sat_monitor_state.json',
+                key: `sat-monitor-state-${context.runId}`,
+                restoreKeys: ['sat-monitor-state-'],
+              };
+              await core.group('Restore Cache', async () => {
+                await cache.restoreCache(options.path, options.key, options.restoreKeys);
+              });
+              core.setOutput('cache-restored', 'true');
+            } catch (error) {
+              console.log(`Cache restore failed: ${error.message}`);
+              core.setOutput('cache-restored', 'false');
+            }
 
       # Create an empty state file if it doesn't exist yet
       - name: Create empty state file if it doesn't exist
@@ -55,10 +70,19 @@ jobs:
         run: |
           python sat_monitor.py
 
-      - name: Upload logs as artifact (if failure or for debugging)
+      # Save the cache after the run
+      - name: Save cache
+        id: save-cache
+        uses: actions/cache/save@v3
+        continue-on-error: true
+        with:
+          path: sat_monitor_state.json
+          key: sat-monitor-state-${{ github.run_id }}
+
+      - name: Upload logs as artifact
         if: always()
         uses: actions/upload-artifact@v3
         with:
-          name: sat-monitor-logs
+          name: sat-monitor-logs-${{ github.run_id }}
           path: sat_monitor.log
           retention-days: 5
