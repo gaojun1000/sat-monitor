@@ -28,7 +28,7 @@ jobs:
           python-version: '3.13'
           cache: 'pip' # This handles caching for pip packages
 
-      # Corrected caching for sat_monitor_state.json
+      # Restore step remains the same
       - name: Restore SAT Monitor state from cache
         id: sat-state-cache
         uses: actions/cache@v4
@@ -89,8 +89,9 @@ jobs:
           echo "--- END DEBUG: Before Cache Save ---"
         shell: bash
 
+      # Updated to use actions/cache/save@v4
       - name: Save SAT Monitor state to cache
-        uses: actions/cache@v4
+        uses: actions/cache/save@v4
         with:
           path: sat_monitor_state.json
           key: ${{ runner.os }}-sat-monitor-state-data-v1 # Must be the same key used in the restore step
