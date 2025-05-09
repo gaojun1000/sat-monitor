@@ -2,11 +2,9 @@ name: SAT Test Dates Monitor
 
 on:
   schedule:
-    # Run every 5 minutes
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
-# Concurrency control to prevent overlapping runs for the same workflow and branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,33 +12,35 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    permissions:
-      actions: write   # For checkout and other actions
-      contents: write  # For committing changes
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          # Retrieve full history for proper commits
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: 'pip' # This handles caching for pip packages
+          cache: 'pip'
 
-      - name: DEBUG - Check state file after checkout
+      # Download the previous state artifact
+      - name: Download previous state
+        id: download-state
+        uses: actions/download-artifact@v4
+        with:
+          name: sat-monitor-state
+          path: .
+          # The following makes the step not fail if the artifact doesn't exist
+          if-no-artifact-found: ignore
+
+      # Initialize state if artifact wasn't found
+      - name: Initialize state file if not found
         run: |
-          echo "--- DEBUG: State File After Checkout ---"
-          if [ -f sat_monitor_state.json ]; then
-            echo "Content of sat_monitor_state.json:"
-            cat sat_monitor_state.json
-          else
-            echo "sat_monitor_state.json does not exist after checkout."
+          if [ ! -f "sat_monitor_state.json" ]; then
             echo '{"timestamp": "", "last_modified": "", "test_date_count": 0, "test_dates": []}' > sat_monitor_state.json
-            echo "Initialized empty sat_monitor_state.json."
+            echo "Initialized empty sat_monitor_state.json as no previous state was found."
+          else
+            echo "Found existing state file from artifact:"
+            cat sat_monitor_state.json
           fi
         shell: bash
 
@@ -60,36 +60,22 @@ jobs:
       - name: DEBUG - Check state file after script run
         run: |
           echo "--- DEBUG: State File After Script Run ---"
-          if [ -f sat_monitor_state.json ]; then
-            echo "Content of sat_monitor_state.json:"
-            cat sat_monitor_state.json
-          else
-            echo "sat_monitor_state.json does not exist after script run."
-          fi
+          cat sat_monitor_state.json
         shell: bash
 
-      - name: Commit and push updated state file
-        # Only run if the state file exists and has changed
-        if: success()
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          # Check if there are changes in the state file
-          if git diff --exit-code -- sat_monitor_state.json; then
-            echo "No changes in state file. Skipping commit."
-          else
-            echo "Changes detected in state file. Committing..."
-            git add sat_monitor_state.json
-            git commit -m "Update SAT monitor state [skip ci]"
-            git push
-          fi
-        shell: bash
+      # Upload the updated state as an artifact
+      - name: Upload state artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sat-monitor-state
+          path: sat_monitor_state.json
+          retention-days: 30
+          overwrite: true
 
       - name: Upload logs as artifact
-        if: always() # Ensure logs are uploaded even if previous steps fail
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sat-monitor-logs-${{ github.run_id }}
-          path: sat_monitor.log # Ensure this is where your Python script writes its log
+          path: sat_monitor.log
           retention-days: 5
