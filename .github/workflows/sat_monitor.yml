@@ -15,12 +15,15 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     permissions:
-      actions: read # For checkout and other actions
-      contents: read # For checkout
+      actions: write   # For checkout and other actions
+      contents: write  # For committing changes
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Retrieve full history for proper commits
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,38 +31,17 @@ jobs:
           python-version: '3.13'
           cache: 'pip' # This handles caching for pip packages
 
-      # Updated restore step with fallback keys
-      - name: Restore SAT Monitor state from cache
-        id: sat-state-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: sat_monitor_state.json
-          key: ${{ runner.os }}-sat-monitor-state-data-v1
-          restore-keys: |
-            ${{ runner.os }}-sat-monitor-state-data-
-
-      - name: DEBUG - Check state file after cache restore
-        if: always() # Run this step even if previous steps fail, for debugging
+      - name: DEBUG - Check state file after checkout
         run: |
-          echo "--- DEBUG: After Cache Restore ---"
-          echo "Workflow Run ID: ${{ github.run_id }}, Attempt: ${{ github.run_attempt }}"
-          echo "Cache hit output for 'sat-state-cache': ${{ steps.sat-state-cache.outputs.cache-hit }}"
-          echo "Listing files in current directory:"
-          ls -la .
+          echo "--- DEBUG: State File After Checkout ---"
           if [ -f sat_monitor_state.json ]; then
             echo "Content of sat_monitor_state.json:"
             cat sat_monitor_state.json
           else
-            echo "sat_monitor_state.json does NOT exist after cache restore."
+            echo "sat_monitor_state.json does not exist after checkout."
+            echo '{"timestamp": "", "last_modified": "", "test_date_count": 0, "test_dates": []}' > sat_monitor_state.json
+            echo "Initialized empty sat_monitor_state.json."
           fi
-          echo "--- END DEBUG: After Cache Restore ---"
-        shell: bash
-
-      - name: Initialize state file if no cache found
-        if: steps.sat-state-cache.outputs.cache-hit != 'true'
-        run: |
-          echo '{"timestamp": "", "last_modified": "", "test_date_count": 0, "test_dates": []}' > sat_monitor_state.json
-          echo "Initialized empty sat_monitor_state.json as no cache was restored."
         shell: bash
 
       - name: Install dependencies
@@ -75,28 +57,34 @@ jobs:
         run: |
           python sat_monitor.py
 
-      - name: DEBUG - Check state file before cache save
-        if: always() # Run this step even if previous steps fail, for debugging
+      - name: DEBUG - Check state file after script run
         run: |
-          echo "--- DEBUG: Before Cache Save ---"
-          echo "Workflow Run ID: ${{ github.run_id }}, Attempt: ${{ github.run_attempt }}"
-          echo "Listing files in current directory:"
-          ls -la .
+          echo "--- DEBUG: State File After Script Run ---"
           if [ -f sat_monitor_state.json ]; then
             echo "Content of sat_monitor_state.json:"
             cat sat_monitor_state.json
           else
-            echo "sat_monitor_state.json does NOT exist before cache save (Python script might have failed to create/update it)."
+            echo "sat_monitor_state.json does not exist after script run."
           fi
-          echo "--- END DEBUG: Before Cache Save ---"
         shell: bash
 
-      # Updated with unique timestamp in the cache key to prevent collisions
-      - name: Save SAT Monitor state to cache
-        uses: actions/cache/save@v4
-        with:
-          path: sat_monitor_state.json
-          key: ${{ runner.os }}-sat-monitor-state-data-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Commit and push updated state file
+        # Only run if the state file exists and has changed
+        if: success()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Check if there are changes in the state file
+          if git diff --exit-code -- sat_monitor_state.json; then
+            echo "No changes in state file. Skipping commit."
+          else
+            echo "Changes detected in state file. Committing..."
+            git add sat_monitor_state.json
+            git commit -m "Update SAT monitor state [skip ci]"
+            git push
+          fi
+        shell: bash
 
       - name: Upload logs as artifact
         if: always() # Ensure logs are uploaded even if previous steps fail
