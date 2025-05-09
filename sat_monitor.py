@@ -86,7 +86,7 @@ def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            logger.info(f"Loaded state from {STATE_FILE}")
+            logger.info(f"Loaded state from {STATE_FILE} with state {state}")
             return state
         else:
             logger.info(f"No state file found at {STATE_FILE}, will create a new one")
