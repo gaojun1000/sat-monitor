@@ -7,6 +7,7 @@ import os
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Union
+import hashlib
 
 # Configure logging
 logging.basicConfig(
@@ -28,8 +29,13 @@ DATE_THRESHOLD = 7  # Alert if more than this many dates are found
 STATE_FILE = "sat_monitor_state.json"  # File to store the last state
 
 
+def calculate_content_hash(text: str) -> str:
+    """Calculate MD5 hash of the content"""
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+
 def fetch_page() -> Optional[Dict[str, str]]:
-    """Fetch the SAT dates page using requests and capture the Last-Modified header"""
+    """Fetch the SAT dates page using requests and capture content hash"""
     logger.info(f"Fetching {URL}")
 
     # Add retry mechanism for robustness
@@ -51,19 +57,18 @@ def fetch_page() -> Optional[Dict[str, str]]:
             response = requests.get(URL, headers=headers, timeout=30)
             response.raise_for_status()
 
-            # Get the Last-Modified header if it exists
-            last_modified = response.headers.get('Last-Modified')
+            # Calculate content hash
+            content_hash = calculate_content_hash(response.text)
+            logger.info(f"Page content MD5 hash: {content_hash}")
 
-            if last_modified:
-                logger.info(f"Page Last-Modified: {last_modified}")
-            else:
-                # If no Last-Modified header, use ETag or current time
-                last_modified = response.headers.get('ETag') or datetime.now().isoformat()
-                logger.info(f"No Last-Modified header, using alternative: {last_modified}")
+            # Still log Last-Modified for reference
+            last_modified = response.headers.get('Last-Modified', 'N/A')
+            logger.info(f"Page Last-Modified: {last_modified}")
 
             logger.info(f"Successfully fetched page with status code: {response.status_code}")
             return {
                 'content': response.text,
+                'content_hash': content_hash,
                 'last_modified': last_modified,
                 'status_code': response.status_code
             }
@@ -86,7 +91,9 @@ def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            logger.info(f"Loaded state from {STATE_FILE} with state {state}")
+            logger.info(f"Loaded state from {STATE_FILE}")
+            # Don't log the entire state as it might contain sensitive data
+            logger.info(f"State contains {len(state)} keys")
             return state
         else:
             logger.info(f"No state file found at {STATE_FILE}, will create a new one")
@@ -106,22 +113,23 @@ def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
         return None
 
 
-def save_state(last_modified: str, test_dates: List[str]) -> None:
-    logger.info("Attempting to execute save_state function...") # ADD THIS
+def save_state(content_hash: str, test_dates: List[str], last_modified: Optional[str] = None) -> None:
+    logger.info("Attempting to execute save_state function...")
     state = {
         "timestamp": datetime.now().isoformat(),
+        "content_hash": content_hash,
         "last_modified": last_modified,
         "test_date_count": len(test_dates),
         "test_dates": test_dates
     }
-    logger.info(f"State dictionary to be saved: {state}") # ADD THIS to see what's being saved
+    logger.info(f"Saving state with content hash: {content_hash}")
 
     try:
         temp_file = f"{STATE_FILE}.tmp"
         with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
         os.replace(temp_file, STATE_FILE)
-        logger.info(f"Successfully saved state to {STATE_FILE} via os.replace") # MODIFY THIS
+        logger.info(f"Successfully saved state to {STATE_FILE} via os.replace")
     except Exception as e:
         logger.error(f"Error saving state in save_state function: {e}")
 
@@ -174,8 +182,8 @@ def extract_test_dates(html_content: str) -> List[str]:
 def send_discord_notification(
         test_dates: List[str],
         page_changed: bool = False,
-        last_modified: Optional[str] = None,
-        prev_modified: Optional[str] = None
+        content_hash: Optional[str] = None,
+        prev_hash: Optional[str] = None
 ) -> bool:
     """Send notification to Discord webhook"""
     if not DISCORD_WEBHOOK_URL:
@@ -187,7 +195,7 @@ def send_discord_notification(
         notification_reason.append(
             f"Found {len(test_dates)} SAT test dates, which exceeds the threshold of {DATE_THRESHOLD}")
     if page_changed:
-        notification_reason.append("The SAT dates page has been modified")
+        notification_reason.append("The SAT dates page content has changed")
 
     notification_text = " and ".join(notification_reason)
 
@@ -218,18 +226,18 @@ def send_discord_notification(
             }]
         }
 
-        # Add modification times if available
-        if last_modified:
+        # Add hash information if available
+        if content_hash:
             message["embeds"][0]["fields"].append({
-                "name": "Current Last-Modified",
-                "value": last_modified,
+                "name": "Current Content Hash",
+                "value": f"`{content_hash[:10]}...`",
                 "inline": False
             })
 
-        if prev_modified and page_changed:
+        if prev_hash and page_changed:
             message["embeds"][0]["fields"].append({
-                "name": "Previous Last-Modified",
-                "value": prev_modified,
+                "name": "Previous Content Hash",
+                "value": f"`{prev_hash[:10]}...`",
                 "inline": False
             })
 
@@ -268,8 +276,8 @@ def send_discord_notification(
 def send_telegram_notification(
         test_dates: List[str],
         page_changed: bool = False,
-        last_modified: Optional[str] = None,
-        prev_modified: Optional[str] = None
+        content_hash: Optional[str] = None,
+        prev_hash: Optional[str] = None
 ) -> bool:
     """Send notification to Telegram channel"""
     if not TELEGRAM_BOT_TOKEN:
@@ -281,7 +289,7 @@ def send_telegram_notification(
         notification_reason.append(
             f"Found {len(test_dates)} SAT test dates, which exceeds the threshold of {DATE_THRESHOLD}")
     if page_changed:
-        notification_reason.append("The SAT dates page has been modified")
+        notification_reason.append("The SAT dates page content has changed")
 
     notification_text = " and ".join(notification_reason)
 
@@ -305,12 +313,12 @@ def send_telegram_notification(
         # Add check time
         message_text += f"\n*Check Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
 
-        # Add modification times if available
-        if last_modified:
-            message_text += f"*Current Last-Modified:* {last_modified}\n"
+        # Add hash information if available
+        if content_hash:
+            message_text += f"*Current Content Hash:* `{content_hash[:10]}...`\n"
 
-        if prev_modified and page_changed:
-            message_text += f"*Previous Last-Modified:* {prev_modified}\n"
+        if prev_hash and page_changed:
+            message_text += f"*Previous Content Hash:* `{prev_hash[:10]}...`\n"
 
         # Add URL
         message_text += f"*URL:* {URL}"
@@ -371,7 +379,7 @@ def send_telegram_notification(
 
 def main() -> None:
     """Main function"""
-    logger.info(f"Starting SAT Test Dates monitoring (version 1.0.1)")
+    logger.info(f"Starting SAT Test Dates monitoring (version 1.1.0)")
     logger.info(f"Running in GitHub Actions: {os.environ.get('GITHUB_ACTIONS', 'No')}")
 
     # Fetch the page
@@ -382,6 +390,7 @@ def main() -> None:
         return
 
     html_content = page_data['content']
+    content_hash = page_data['content_hash']
     last_modified = page_data['last_modified']
 
     # Extract test dates
@@ -397,25 +406,28 @@ def main() -> None:
     # Determine if we need to send notifications
     should_notify = False
     page_changed = False
-    prev_modified = None
+    prev_hash = None
 
     # Check if we have previous state
     if prev_state:
-        # Check if the page has changed since last time based on Last-Modified
-        prev_modified_value = prev_state.get("last_modified")
+        # Check if the page has changed since last time based on content hash
+        prev_hash_value = prev_state.get("content_hash")
         prev_dates = prev_state.get("test_dates", [])
 
-        if last_modified != prev_modified_value:
+        if content_hash != prev_hash_value:
             page_changed = True
-            prev_modified = prev_modified_value
+            prev_hash = prev_hash_value
             should_notify = True
-            logger.info(f"Page has been modified since last check (Last-Modified changed)")
+            logger.info(f"Page content has changed (hash mismatch)")
+            logger.info(f"Previous hash: {prev_hash_value}")
+            logger.info(f"Current hash: {content_hash}")
         elif set(test_dates) != set(prev_dates):
+            # This shouldn't normally happen if hash detection is working properly
             page_changed = True
             should_notify = True
-            logger.info(f"Test dates have changed even though Last-Modified header didn't change")
+            logger.warning(f"Test dates have changed even though content hash didn't change")
         else:
-            logger.info("Page and test dates have not changed since last check")
+            logger.info("Page content and test dates have not changed since last check")
     else:
         # No previous state, this is the first run
         logger.info("First run, no previous state to compare")
@@ -429,8 +441,8 @@ def main() -> None:
 
     # Send notifications if needed
     if should_notify:
-        discord_result = send_discord_notification(test_dates, page_changed, last_modified, prev_modified)
-        telegram_result = send_telegram_notification(test_dates, page_changed, last_modified, prev_modified)
+        discord_result = send_discord_notification(test_dates, page_changed, content_hash, prev_hash)
+        telegram_result = send_telegram_notification(test_dates, page_changed, content_hash, prev_hash)
 
         if discord_result and telegram_result:
             logger.info("All notifications sent successfully")
@@ -444,7 +456,7 @@ def main() -> None:
         logger.info("No need to send notifications")
 
     # Save current state
-    save_state(last_modified, test_dates)
+    save_state(content_hash, test_dates, last_modified)
 
     logger.info("Monitoring completed successfully")
 
