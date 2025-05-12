@@ -179,9 +179,7 @@ def load_state() -> Optional[Dict[str, Union[str, int, List[str]]]]:
 def save_state(content_hash: str, test_dates: List[str], last_modified: Optional[str] = None) -> None:
     logger.info("Attempting to execute save_state function...")
     state = {
-        "timestamp": datetime.now().isoformat(),
         "content_hash": content_hash,
-        "last_modified": last_modified,
         "test_date_count": len(test_dates),
         "test_dates": test_dates
     }
@@ -454,7 +452,6 @@ def main() -> None:
 
     html_content = page_data['content']
     content_hash = page_data['content_hash']
-    last_modified = page_data['last_modified']
 
     # Extract test dates
     test_dates = extract_test_dates(html_content)
@@ -519,7 +516,7 @@ def main() -> None:
         logger.info("No need to send notifications")
 
     # Save current state
-    save_state(content_hash, test_dates, last_modified)
+    save_state(content_hash, test_dates)
 
     logger.info("Monitoring completed successfully")
 
