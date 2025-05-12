@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 import json
 import logging
 import os
@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 import hashlib
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -29,9 +30,71 @@ DATE_THRESHOLD = 7  # Alert if more than this many dates are found
 STATE_FILE = "sat_monitor_state.json"  # File to store the last state
 
 
+def clean_html_for_hash(html_content: str) -> str:
+    """
+    Clean the HTML content to remove elements that might change frequently
+    but don't affect the actual content we care about.
+    """
+    try:
+        # Parse the HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Remove common dynamic elements
+
+        # 1. Remove all script tags (JavaScript can contain timestamps, random values, etc.)
+        for script in soup.find_all('script'):
+            script.decompose()
+
+        # 2. Remove all style tags (CSS can change without affecting content)
+        for style in soup.find_all('style'):
+            style.decompose()
+
+        # 3. Remove comments (may contain build info, timestamps)
+        for comment in soup.find_all(text=lambda text: isinstance(text, Comment)):
+            comment.extract()
+
+        # 4. Remove meta tags (often contain dynamic content)
+        for meta in soup.find_all('meta'):
+            meta.decompose()
+
+        # 5. Remove specific attributes that might change frequently
+        for tag in soup.find_all(True):  # Find all elements
+            # Remove data-* attributes (often used for dynamic data)
+            attrs_to_remove = [attr for attr in tag.attrs if attr.startswith('data-')]
+            # Also remove common attributes that may change without affecting content
+            attrs_to_remove.extend(['class', 'id', 'style', 'data-reactid', 'data-react-checksum'])
+
+            for attr in attrs_to_remove:
+                if attr in tag.attrs:
+                    del tag.attrs[attr]
+
+        # 6. Convert the cleaned soup back to string
+        cleaned_html = str(soup)
+
+        # 7. Remove whitespace variations
+        cleaned_html = re.sub(r'\s+', ' ', cleaned_html)
+
+        # 8. Extract just the main content table if possible
+        content_soup = BeautifulSoup(cleaned_html, 'html.parser')
+        table = content_soup.find('table')
+        if table:
+            # If we can identify the main content table, just use that for hash
+            logger.info("Using only the table content for hash calculation")
+            cleaned_html = str(table)
+
+        return cleaned_html
+    except Exception as e:
+        logger.error(f"Error cleaning HTML for hash: {e}")
+        # Fall back to original content if cleaning fails
+        return html_content
+
+
 def calculate_content_hash(text: str) -> str:
     """Calculate MD5 hash of the content"""
-    return hashlib.md5(text.encode('utf-8')).hexdigest()
+    # First clean the HTML to remove dynamic elements
+    cleaned_text = clean_html_for_hash(text)
+    logger.info(f"Original text length: {len(text)}, Cleaned text length: {len(cleaned_text)}")
+    return hashlib.md5(cleaned_text.encode('utf-8')).hexdigest()
 
 
 def fetch_page() -> Optional[Dict[str, str]]:
@@ -57,9 +120,9 @@ def fetch_page() -> Optional[Dict[str, str]]:
             response = requests.get(URL, headers=headers, timeout=30)
             response.raise_for_status()
 
-            # Calculate content hash
+            # Calculate content hash on cleaned HTML
             content_hash = calculate_content_hash(response.text)
-            logger.info(f"Page content MD5 hash: {content_hash}")
+            logger.info(f"Page content MD5 hash (after cleaning): {content_hash}")
 
             # Still log Last-Modified for reference
             last_modified = response.headers.get('Last-Modified', 'N/A')
@@ -379,7 +442,7 @@ def send_telegram_notification(
 
 def main() -> None:
     """Main function"""
-    logger.info(f"Starting SAT Test Dates monitoring (version 1.1.0)")
+    logger.info(f"Starting SAT Test Dates monitoring (version 1.2.0)")
     logger.info(f"Running in GitHub Actions: {os.environ.get('GITHUB_ACTIONS', 'No')}")
 
     # Fetch the page
