@@ -3,7 +3,7 @@ name: SAT Test Dates Monitor
 on:
   schedule:
     # Run every 5 minutes
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 # Concurrency control to prevent overlapping runs for the same workflow and branch
