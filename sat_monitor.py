@@ -57,30 +57,11 @@ def clean_html_for_hash(html_content: str) -> str:
         for meta in soup.find_all('meta'):
             meta.decompose()
 
-        # 5. Remove specific attributes that might change frequently
-        for tag in soup.find_all(True):  # Find all elements
-            # Remove data-* attributes (often used for dynamic data)
-            attrs_to_remove = [attr for attr in tag.attrs if attr.startswith('data-')]
-            # Also remove common attributes that may change without affecting content
-            attrs_to_remove.extend(['class', 'id', 'style', 'data-reactid', 'data-react-checksum'])
-
-            for attr in attrs_to_remove:
-                if attr in tag.attrs:
-                    del tag.attrs[attr]
-
         # 6. Convert the cleaned soup back to string
         cleaned_html = str(soup)
 
         # 7. Remove whitespace variations
         cleaned_html = re.sub(r'\s+', ' ', cleaned_html)
-
-        # 8. Extract just the main content table if possible
-        content_soup = BeautifulSoup(cleaned_html, 'html.parser')
-        table = content_soup.find('table')
-        if table:
-            # If we can identify the main content table, just use that for hash
-            logger.info("Using only the table content for hash calculation")
-            cleaned_html = str(table)
 
         return cleaned_html
     except Exception as e:
